@@ -7,6 +7,25 @@ from src.entity_detection import EntityDetector
 from src.entity_tracking import EntityTracker
 from src.video_generation import VideoGenerator
 
+
+def process_batch(frames, detector, tracker, generator, writer, current_count):
+    print(f"Working on Batch ending at Frame: {current_count} | Status: Processing...", flush=True)
+    
+    with torch.no_grad():
+        # 1. Detector ko poora batch ek saath bhej rahe hain!
+        batch_entities = detector.detect(frames)
+        
+    # Tracker aur generator abhi single frame loop support karte hain, unhe smoothly loop me chalao
+    for i, entities in enumerate(batch_entities):
+        tracked_entities = tracker.track(entities)
+        generated_frame = generator.generate(tracked_entities)
+        
+        # Final output ko resize karke save karo
+        height, width = frames[i].shape[0], frames[i].shape[1]
+        final_output = cv2.resize(generated_frame, (width, height))
+        writer.write(final_output)
+
+
 def main():
     parser = argparse.ArgumentParser(description='EntityBench-Toolkit')
     parser.add_argument('--demo', action='store_true', help='Run the demo')
@@ -31,23 +50,22 @@ def main():
 
     print("Processing frames one-by-one to save RAM...")
     frame_count = 0
+    BATCH_SIZE = 16
+    frames_batch = []
     while video_input.isOpened():
         ret, frame = video_input.read()
         if not ret:
+            if frames_batch:
+                process_batch(frames_batch, entity_detector, entity_tracker, video_generator, video_writer, frame_count)
+        
             break
         frame_count += 1
-        print(f"Working on Frame: {frame_count} | Status: Processing...", flush=True)
-        with torch.no_grad(): # RAM aur computational speed badhaane ke liye
-            entities = entity_detector.detect(frame)
+        frames_batch.append(frame)
+        if len(frames_batch) == BATCH_SIZE:
+            process_batch(frames_batch, entity_detector, entity_tracker, video_generator, video_writer, frame_count)
+            frames_batch = []
             
-        tracked_entities = entity_tracker.track(entities)
-        
-        # 3. Output frame generation aur video saving
-        generated_frame = video_generator.generate(tracked_entities)
-        final_output = cv2.resize(generated_frame, (width, height))
-        video_writer.write(final_output)
-        success_flag = True
-
+    success_flag = True
     # Resources ko clean up karna
     video_input.release()
     video_writer.release()
